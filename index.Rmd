@@ -46,19 +46,43 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+## Evelyn Stafford ebs797
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+My dataset consists of 6,497 different wines (observations). It gives information about their acidity, sugar level, chlorides, sulfur dioxide level, density, pH, sulfates, alcohol content, quality, and if they are red or white. For this project I will be focusing on 6 main variables:
+
+`type`
+`fixed acidity`
+`residual sugar`
+`total sulfur dioxide`
+`alcohol`
+`quality`
+
+I found this data on a public website called Kaggle and found it interesting because I have grown to love wine! The binary variable throughout this project is `type`. It tells us whether the wine is white or red. There are 4,898 white wines and 1,599 red wines. I have assigned the white wines to be the positive case, meaning a binary value of 1 will indicate white wine and 0 will indicate red wine. 
 
 ```{R}
 library(tidyverse)
 # read your datasets in here, e.g., with read_csv()
+wine_df <- read_csv("wine-quality-white-and-red.csv")
 
 # if your dataset needs tidying, do so here
+# keeping only columns I want for this project
+wine_df <- wine_df %>% select(`type`, `fixed acidity`, `residual sugar`, `total sulfur dioxide`, `alcohol`, `quality`) 
+
+# a scaled version with only quantitative columns 
+quantwine_df <- wine_df %>% select(2:6) %>% scale
+quantwine_df <- data.frame(quantwine_df)
+
+# scaled with type as a binary 
+scaledwine_df <- wine_df %>% select(2:6) %>% scale
+scaledwine_df <- data.frame(quantwine_df)
+scaledwine_df$type <- ifelse(wine_df$type=="white", 1, 0)
+scaledwine_df <- scaledwine_df %>% mutate(word_type = wine_df$type)
 
 # any other code here
+count(filter(wine_df, type == "white"))
+count(filter(wine_df, type == "red"))
 ```
 
 ### Cluster Analysis
@@ -66,72 +90,260 @@ library(tidyverse)
 ```{R}
 library(cluster)
 # clustering code here
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(quantwine_df, diss = TRUE, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+wine_pam <- quantwine_df %>% pam(k=2) 
+wine_pam
+
+wine_pam$silinfo$avg.width
+
+pamclust<-quantwine_df %>% mutate(cluster=as.factor(wine_pam$clustering))
+pamclust %>% group_by(cluster) %>% summarize_if(is.numeric,mean,na.rm=T)
+
+wine_df%>%slice(wine_pam$id.med)
+
+pamclust%>%mutate(type=wine_df$type)%>%
+  ggplot(aes(fixed.acidity, residual.sugar, color=type, shape=cluster))+geom_point(size=4)
+
+library(GGally)
+quantwine_df %>% mutate(cluster=as.factor(wine_pam$clustering)) %>% 
+  ggpairs(columns = c(1:5), aes(color=cluster))
 ```
 
-Discussion of clustering here
+First, I looked at the first plot and found that the best k to choose was 2. Then I performed a PAM analysis on my data and interpreted my findings. One of the most important things I found was the average silhouette width. Unfortunately, my average silhouette width was 0.25 which tells us that no substantial structure has been found. We can even tell by the graph showing the clusters vs the actual type of wine that the goodness of fit of this cluster solution is not great. 
+
+Nevertheless, I took a look at some other findings. Between the two groups, one medoid was a white wine and one medoid was a red wine. It’s interesting that even though the average silhouette width was so poor, the medoids for each group were the two different types of wine. I then  moved on to the ggpairs plot which definitely gave some insight. Red wine seems to have higher residual sugar, and sulfur dioxide. Meanwhile, there was less of a noticeable difference when it came to alcohol and quality. We can see these actual values in the table I created showing a summary of each cluster. 
     
     
 ### Dimensionality Reduction with PCA
 
 ```{R}
 # PCA code here
+princomp(quantwine_df, cor=T) -> winepca
+summary(winepca, loadings=T)
+
+eigval<-winepca$sdev^2
+round(cumsum(eigval)/sum(eigval), 2)
+
+pcas <- data.frame(winepca$scores)
+
+winepca_graph <-data.frame(type=wine_df$type, PC1=winepca$scores[, 1],PC2=winepca$scores[, 2])
+ggplot(winepca_graph, aes(PC1, PC2)) + geom_point()
+
+wine_df%>%mutate(PC1=pcas[,1], PC2=pcas[,2])%>%
+  ggplot(aes(PC1,PC2,color=type))+geom_point()
+
 ```
 
-Discussions of PCA here. 
+In this section I performed dimensionality reduction with PCA. I decided to retain PC1, PC2, and PC3 because that is when the cumulative proportion of variance became greater than 80%. In fact, these three variables account for 82% of variance in my dataset. 
+
+When a wine scores high on PC1, it has high acidity, alcohol content, and quality but low levels of residual sugar and sulfur dioxide. When a wine scores high on PC2, it has very high acidity but very low values of all other variables. When a wine scores high on PC3, it has high levels of acidity, residual sugar, and quality. As a final note: the graph of PC1 vs PC2 scores in my dataset is interesting. I color coded it to show the type of wine, red or white. Red wines tend to score higher on both PC1 and PC2, while white wines score lower on both. 
+ 
 
 ###  Linear Classifier
 
 ```{R}
 # linear classifier code here
+class_diag <- function(score, truth, positive, cutoff=.5, strictlygreater=T){
+  if(strictlygreater==T) pred <- factor(score>cutoff,levels=c("TRUE","FALSE"))
+  else pred <- factor(score>=cutoff,levels=c("TRUE","FALSE"))
+  truth <- factor(truth==positive, levels=c("TRUE","FALSE"))
+  tab<-table(truth, pred)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[1,1]/rowSums(tab)[1]
+  spec=tab[2,2]/rowSums(tab)[2]
+  ppv=tab[1,1]/colSums(tab)[1]
+#CALCULATE F1
+  f1=2*(sens*ppv)/(sens+ppv)
+#CALCULATE EXACT AUC
+  truth<-as.numeric(truth=="TRUE")
+  ord<-order(score, decreasing=TRUE)
+  score <- score[ord]; truth <- truth[ord]
+  TPR=cumsum(truth)/max(1,sum(truth))
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  dup<-c(score[-1]>=score[-length(score)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+  round(data.frame(acc,sens,spec,ppv,f1,ba=(sens+spec)/2,auc, row.names = "Metrics"),4)
+}
+
+# logistic
+fit <- glm(type ~ fixed.acidity + residual.sugar + total.sulfur.dioxide + alcohol + quality, data=scaledwine_df, family="binomial")
+score <- predict(fit, type="response")
+
+
+class_diag(score, scaledwine_df$type, positive=1)
+
+# confusion matrix
+scoredwine <- wine_df %>% mutate(score = score)
+scoredwine <- scoredwine %>% mutate(upscore = score*100)
+
+y<-scoredwine$type
+x<-scoredwine$upscore
+y<- factor(y, levels=c("white", "red"))
+
+accuracy <- vector()
+cutoff <- 0:100 
+for(i in cutoff){
+  y_hat <- ifelse(x>i, "white", "red")
+  accuracy[i] <- mean(y==y_hat) 
+}
+qplot(y=accuracy)+geom_line()+scale_x_continuous(breaks=0:100)
+
+max(accuracy)
+cutoff[which.max(accuracy)]
+
+y_hat <- ifelse(x>55, "white", "red")
+mean(y==y_hat)
+
+class_diag(score = x,truth = y, positive = "white", cutoff = 55)
+
+table(actual=y, predicted = y_hat) %>% addmargins
 ```
 
 ```{R}
 # cross-validation of linear classifier here
+library(tidyverse)
+cvwine <- select(scaledwine_df, 1:6)
+view(cvwine)
+
+set.seed(1234)
+k=10 
+data<-cvwine[sample(nrow(cvwine)),] 
+folds<-cut(seq(1:nrow(cvwine)),breaks=k,labels=F) 
+diags<-NULL
+for(i in 1:k){
+
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$type 
+
+  fit2<-glm(type~.,data=train,family="binomial")
+ 
+  probs<-predict(fit2,newdata = test,type="response")
+
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+summarize_all(diags,mean) 
+
 ```
 
-Discussion here
+First, I ran a logistic classifier on my data and found that it was doing great according to its AUC of 0.973. Then, I used a plot to figure out which cutoff would be best to use as a classifying rule. I found out that the best cutoff was a score of 55. That classifier also did great as its AUC was 0.973. To look at the actual values, I created a confusion matrix. Out of 4,898 white wines my model only got 167 wrong, and out of 1,599 red wines, my model only got 208 wrong. I am relatively happy with those results!
+
+Finally, I performed a 10 fold cross-validation. Fortunately, I don’t think that there are any signs of overfitting. The AUC and accuracy hovered steadily around the values that I was getting before. There was no drastic drop after performing it on the 10 different folds. 
+
 
 ### Non-Parametric Classifier
 
 ```{R}
 library(caret)
 # non-parametric classifier code here
+
+# k nearest neighbors 
+library(caret)
+fit3 <- knn3(factor(type==1,levels=c("TRUE","FALSE")) ~ fixed.acidity + residual.sugar + total.sulfur.dioxide + alcohol + quality, data=scaledwine_df, k=2)
+y_hat_knn <- predict(fit3,scaledwine_df)
+
+class_diag(y_hat_knn[,1], scaledwine_df$type, positive=1)
+
+# confusion matrix
+table(truth= factor(scaledwine_df$type==1, levels=c("TRUE", "FALSE")),
+      prediction= factor(y_hat_knn[,1]>.5, levels=c("TRUE","FALSE"))) %>% addmargins
+
 ```
 
 ```{R}
 # cross-validation of np classifier here
+set.seed(1234)
+k=10 
+data<-cvwine[sample(nrow(cvwine)),] 
+folds<-cut(seq(1:nrow(cvwine)),breaks=k,labels=F) 
+diags<-NULL
+for(i in 1:k){
+
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$type
+
+  fit4<-knn3(type~.,data=train)
+
+  probs<-predict(fit4,newdata = test)[,2]
+
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+summarize_all(diags,mean)
+
 ```
 
-Discussion
+First, I ran a k-nearest-neighbors classifier on my model. This was doing even better than the logistic classifier according to its AUC of 0.999. Looking at the actual values in the confusion matrix we can see just how good of a job it is doing. Out of 4,898 white wines my model only got 134 wrong, and out of 1,599 red wines, my model only got 13 wrong. 
+
+I then performed a 10 fold cross-validation to check for overfitting. After training and testing the k-nearest-neighbors on 10 different folds, the AUC and accuracy did drop. The drops in values weren’t necessarily drastic, but to be on the safe side I think we can say that there is some overfitting happening here. The logistic classifier seems to be a safer bet. 
 
 
 ### Regression/Numeric Prediction
 
 ```{R}
-# regression model code here
+# linear regression
+fit5<-lm(residual.sugar~.,data=quantwine_df) 
+yhat5<-predict(fit5) 
+
+mean((quantwine_df$residual.sugar-yhat5)^2) 
 ```
 
 ```{R}
 # cross-validation of regression model here
+set.seed(1234)
+k=5 
+data<-quantwine_df[sample(nrow(quantwine_df)),] 
+folds<-cut(seq(1:nrow(quantwine_df)),breaks=k,labels=F)
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,]
+  test<-data[folds==i,]
+  fit6<-lm(residual.sugar~.,data=train)
+ 
+  yhat6<-predict(fit6,newdata=test)
+
+  diags<-mean((test$residual.sugar-yhat6)^2) 
+}
+mean(diags) 
 ```
 
-Discussion
+When looking for overfitting in a linear regression model, we analyze the mean squared error (MSE). If the MSE drastically increases after cross-validation that is serious evidence of overfitting. Having a low MSE is good and means your model is doing well predicting for your data. If the MSE is low on your original data but high on new data, your model is too fitted to the original data and doesn’t adapt well to new inputs. 
+
+Fortunately, the MSE for both my linear regression and cross-validation are low. This tells me that there are no obvious signs of overfitting! 
 
 ### Python 
 
 ```{R}
 library(reticulate)
+use_python("/usr/bin/python3", required = F)
+
+max(wine_df$alcohol)
+filter(wine_df, alcohol == 14.9)
+thiswine <- "red"
+
 ```
 
 ```{python}
 # python code here
+highest="The wine with the highest alcohol content is a"
+wine="wine."
+
+print(highest, r.thiswine, wine)
 ```
 
-Discussion
+Using reticulate, you can share objects between R and Python! Here I was able to announce which wine had the highest alcohol content using a Python script, but using information that I found in an R script. 
 
 ### Concluding Remarks
 
-Include concluding remarks here, if any
+I had such a great time with this final project and feel like it was a great way to really get comfortable and understand classifying. Thanks for a great semester! 
 
 
 
